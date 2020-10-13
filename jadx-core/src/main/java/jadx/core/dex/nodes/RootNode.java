@@ -44,6 +44,7 @@ public class RootNode {
 	private static final Logger LOG = LoggerFactory.getLogger(RootNode.class);
 
 	private final JadxArgs args;
+	private final List<IDexTreeVisitor> preDecompilePasses;
 	private final List<IDexTreeVisitor> passes;
 
 	private final ErrorsCounter errorsCounter = new ErrorsCounter();
@@ -68,6 +69,7 @@ public class RootNode {
 
 	public RootNode(JadxArgs args) {
 		this.args = args;
+		this.preDecompilePasses = Jadx.getPreDecompilePassesList();
 		this.passes = Jadx.getPassesList(args);
 		this.stringUtils = new StringUtils(args);
 		this.constValues = new ConstStorage(args);
@@ -90,6 +92,7 @@ public class RootNode {
 		// sort classes by name, expect top classes before inner
 		classes.sort(Comparator.comparing(ClassNode::getFullName));
 		initInnerClasses();
+		LOG.debug("Classes loaded: {}", classes.size());
 	}
 
 	private void addDummyClass(IClassData classData, Exception exc) {
@@ -153,11 +156,10 @@ public class RootNode {
 				ClspGraph newClsp = new ClspGraph(this);
 				newClsp.load();
 				newClsp.addApp(classes);
-
 				this.clsp = newClsp;
 			}
 		} catch (Exception e) {
-			throw new JadxRuntimeException("Error loading classpath", e);
+			throw new JadxRuntimeException("Error loading jadx class set", e);
 		}
 	}
 
@@ -191,7 +193,7 @@ public class RootNode {
 	}
 
 	public void runPreDecompileStage() {
-		for (IDexTreeVisitor pass : Jadx.getPreDecompilePassesList()) {
+		for (IDexTreeVisitor pass : preDecompilePasses) {
 			try {
 				pass.init(this);
 			} catch (Exception e) {
@@ -200,6 +202,12 @@ public class RootNode {
 			for (ClassNode cls : classes) {
 				DepthTraversal.visit(pass, cls);
 			}
+		}
+	}
+
+	public void runPreDecompileStageForClass(ClassNode cls) {
+		for (IDexTreeVisitor pass : preDecompilePasses) {
+			DepthTraversal.visit(pass, cls);
 		}
 	}
 

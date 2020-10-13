@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.core.Consts;
+import jadx.core.dex.instructions.ArithNode;
 import jadx.core.dex.instructions.BaseInvokeNode;
 import jadx.core.dex.instructions.IndexInsnNode;
 import jadx.core.dex.instructions.InsnType;
@@ -84,8 +85,7 @@ public final class TypeUpdate {
 		}
 		if (Consts.DEBUG_TYPE_INFERENCE) {
 			LOG.debug("Applying types for {} -> {}", ssaVar, candidateType);
-			updates.forEach(updateEntry -> LOG.debug("  {} -> {}, insn: {}",
-					updateEntry.getType(), updateEntry.getArg(), updateEntry.getArg().getParentInsn()));
+			updates.forEach(updateEntry -> LOG.debug("  {} -> {}", updateEntry.getType(), updateEntry.getArg()));
 		}
 		updateInfo.applyUpdates();
 		return CHANGED;
@@ -96,25 +96,35 @@ public final class TypeUpdate {
 			throw new JadxRuntimeException("Null type update for arg: " + arg);
 		}
 		ArgType currentType = arg.getType();
-		if (Objects.equals(currentType, candidateType) && !updateInfo.getFlags().isIgnoreSame()) {
-			return SAME;
-		}
-		TypeCompareEnum compareResult = comparator.compareTypes(candidateType, currentType);
-		if (arg.isTypeImmutable() && currentType != ArgType.UNKNOWN) {
-			// don't changed type
-			if (compareResult == TypeCompareEnum.EQUAL) {
+		if (Objects.equals(currentType, candidateType)) {
+			if (!updateInfo.getFlags().isIgnoreSame()) {
 				return SAME;
 			}
-			if (Consts.DEBUG_TYPE_INFERENCE) {
-				LOG.debug("Type rejected for {} due to conflict: candidate={}, current={}", arg, candidateType, currentType);
+		} else {
+			if (candidateType.isWildcard()) {
+				if (Consts.DEBUG_TYPE_INFERENCE) {
+					LOG.debug("Wildcard type rejected for {}: candidate={}, current={}", arg, candidateType, currentType);
+				}
+				return REJECT;
 			}
-			return REJECT;
-		}
-		if (compareResult.isWider() && !updateInfo.getFlags().isAllowWider()) {
-			if (Consts.DEBUG_TYPE_INFERENCE) {
-				LOG.debug("Type rejected for {}: candidate={} is wider than current={}", arg, candidateType, currentType);
+
+			TypeCompareEnum compareResult = comparator.compareTypes(candidateType, currentType);
+			if (arg.isTypeImmutable() && currentType != ArgType.UNKNOWN) {
+				// don't changed type
+				if (compareResult == TypeCompareEnum.EQUAL) {
+					return SAME;
+				}
+				if (Consts.DEBUG_TYPE_INFERENCE) {
+					LOG.debug("Type rejected for {} due to conflict: candidate={}, current={}", arg, candidateType, currentType);
+				}
+				return REJECT;
 			}
-			return REJECT;
+			if (compareResult.isWider() && !updateInfo.getFlags().isAllowWider()) {
+				if (Consts.DEBUG_TYPE_INFERENCE) {
+					LOG.debug("Type rejected for {}: candidate={} is wider than current={}", arg, candidateType, currentType);
+				}
+				return REJECT;
+			}
 		}
 		if (arg instanceof RegisterArg) {
 			RegisterArg reg = (RegisterArg) arg;
@@ -132,10 +142,7 @@ public final class TypeUpdate {
 			}
 			return REJECT;
 		}
-		if (!inBounds(updateInfo, typeInfo.getBounds(), candidateType)) {
-			if (Consts.DEBUG_TYPE_INFERENCE) {
-				LOG.debug("Reject type '{}' for {} by bounds: {}", candidateType, ssaVar, typeInfo.getBounds());
-			}
+		if (!inBounds(updateInfo, ssaVar, typeInfo.getBounds(), candidateType)) {
 			return REJECT;
 		}
 		return requestUpdateForSsaVar(updateInfo, ssaVar, candidateType);
@@ -191,10 +198,16 @@ public final class TypeUpdate {
 	}
 
 	boolean inBounds(Set<ITypeBound> bounds, ArgType candidateType) {
-		return inBounds(null, bounds, candidateType);
+		for (ITypeBound bound : bounds) {
+			ArgType boundType = bound.getType();
+			if (boundType != null && !checkBound(candidateType, bound, boundType)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
-	private boolean inBounds(@Nullable TypeUpdateInfo updateInfo, Set<ITypeBound> bounds, ArgType candidateType) {
+	private boolean inBounds(TypeUpdateInfo updateInfo, SSAVar ssaVar, Set<ITypeBound> bounds, ArgType candidateType) {
 		for (ITypeBound bound : bounds) {
 			ArgType boundType;
 			if (updateInfo != null && bound instanceof ITypeBoundDynamic) {
@@ -203,6 +216,9 @@ public final class TypeUpdate {
 				boundType = bound.getType();
 			}
 			if (boundType != null && !checkBound(candidateType, bound, boundType)) {
+				if (Consts.DEBUG_TYPE_INFERENCE) {
+					LOG.debug("Reject type '{}' for {} by bound: {}", candidateType, ssaVar, bound);
+				}
 				return false;
 			}
 		}
@@ -235,6 +251,7 @@ public final class TypeUpdate {
 
 			case UNKNOWN:
 				LOG.warn("Can't compare types, unknown hierarchy: {} and {}", candidateType, boundType);
+				comparator.compareTypes(candidateType, boundType);
 				return true;
 
 			default:
@@ -270,7 +287,7 @@ public final class TypeUpdate {
 		registry.put(InsnType.AGET, this::arrayGetListener);
 		registry.put(InsnType.APUT, this::arrayPutListener);
 		registry.put(InsnType.IF, this::ifListener);
-		registry.put(InsnType.ARITH, this::suggestAllSameListener);
+		registry.put(InsnType.ARITH, this::arithListener);
 		registry.put(InsnType.NEG, this::suggestAllSameListener);
 		registry.put(InsnType.NOT, this::suggestAllSameListener);
 		registry.put(InsnType.CHECK_CAST, this::checkCastListener);
@@ -356,6 +373,9 @@ public final class TypeUpdate {
 		if (type == null) {
 			return null;
 		}
+		if (type.isWildcard()) {
+			return null;
+		}
 		if (type.containsTypeVariable()) {
 			if (knownTypeVars.isEmpty()) {
 				return null;
@@ -422,12 +442,24 @@ public final class TypeUpdate {
 		return allSame ? SAME : CHANGED;
 	}
 
+	private TypeUpdateResult arithListener(TypeUpdateInfo updateInfo, InsnNode insn, InsnArg arg, ArgType candidateType) {
+		ArithNode arithInsn = (ArithNode) insn;
+		if (candidateType == ArgType.BOOLEAN && arithInsn.getOp().isBitOp()) {
+			// force all args to boolean
+			return allSameListener(updateInfo, insn, arg, candidateType);
+		}
+		return suggestAllSameListener(updateInfo, insn, arg, candidateType);
+	}
+
 	/**
 	 * Try to set candidate type to all args, don't fail on reject
 	 */
 	private TypeUpdateResult suggestAllSameListener(TypeUpdateInfo updateInfo, InsnNode insn, InsnArg arg, ArgType candidateType) {
 		if (!isAssign(insn, arg)) {
-			updateTypeChecked(updateInfo, insn.getResult(), candidateType);
+			RegisterArg resultArg = insn.getResult();
+			if (resultArg != null) {
+				updateTypeChecked(updateInfo, resultArg, candidateType);
+			}
 		}
 		boolean allSame = true;
 		for (InsnArg insnArg : insn.getArguments()) {

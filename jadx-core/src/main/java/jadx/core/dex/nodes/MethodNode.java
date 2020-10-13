@@ -1,6 +1,5 @@
 package jadx.core.dex.nodes;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -31,7 +30,7 @@ import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.instructions.args.RegisterArg;
 import jadx.core.dex.instructions.args.SSAVar;
-import jadx.core.dex.nodes.parser.SignatureParser;
+import jadx.core.dex.nodes.utils.TypeUtils;
 import jadx.core.dex.regions.Region;
 import jadx.core.dex.trycatch.ExceptionHandler;
 import jadx.core.utils.Utils;
@@ -59,7 +58,7 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 	// additional info available after load, keep on unload
 	private ArgType retType;
 	private List<ArgType> argTypes;
-	private List<GenericTypeParameter> typeParameters;
+	private List<ArgType> typeParameters;
 
 	// decompilation data, reset on unload
 	private RegisterArg thisArg;
@@ -82,8 +81,8 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return methodNode;
 	}
 
-	public MethodNode(ClassNode classNode, IMethodData mthData) {
-		this.mthInfo = MethodInfo.fromData(classNode.root(), mthData);
+	private MethodNode(ClassNode classNode, IMethodData mthData) {
+		this.mthInfo = MethodInfo.fromRef(classNode.root(), mthData.getMethodRef());
 		this.parentClass = classNode;
 		this.accFlags = new AccessInfo(mthData.getAccessFlags(), AFType.METHOD);
 		this.methodIsVirtual = !mthData.isDirect();
@@ -96,6 +95,10 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 			this.codeReader = codeReader.copy();
 			this.insnsCount = codeReader.getInsnsCount();
 		}
+
+		this.retType = mthInfo.getReturnType();
+		this.argTypes = mthInfo.getArgumentsTypes();
+		this.typeParameters = Collections.emptyList();
 		unload();
 	}
 
@@ -117,6 +120,15 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		exceptionHandlers = Collections.emptyList();
 		loops = Collections.emptyList();
 		unloadAttributes();
+	}
+
+	public void updateTypes(List<ArgType> argTypes, ArgType retType) {
+		this.argTypes = argTypes;
+		this.retType = retType;
+	}
+
+	public void updateTypeParameters(List<ArgType> typeParameters) {
+		this.typeParameters = typeParameters;
 	}
 
 	@Override
@@ -171,62 +183,13 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		}
 	}
 
-	public void initMethodTypes() {
-		List<ArgType> types = parseSignature();
-		if (types == null) {
-			this.retType = mthInfo.getReturnType();
-			this.argTypes = mthInfo.getArgumentsTypes();
-			this.typeParameters = Collections.emptyList();
-		} else {
-			this.argTypes = Collections.unmodifiableList(types);
-		}
-	}
-
-	@Nullable
-	private List<ArgType> parseSignature() {
-		SignatureParser sp = SignatureParser.fromNode(this);
-		if (sp == null) {
-			return null;
-		}
+	public void reload() {
+		unload();
 		try {
-			this.typeParameters = sp.consumeGenericTypeParameters();
-			List<ArgType> argsTypes = sp.consumeMethodArgs();
-			this.retType = sp.consumeType();
-
-			List<ArgType> mthArgs = mthInfo.getArgumentsTypes();
-			if (argsTypes.size() != mthArgs.size()) {
-				if (argsTypes.isEmpty()) {
-					return null;
-				}
-				if (!tryFixArgsCounts(argsTypes, mthArgs)) {
-					addComment("Incorrect method signature, types: " + Utils.listToString(argsTypes));
-					return null;
-				}
-			}
-			return argsTypes;
-		} catch (Exception e) {
-			addWarnComment("Failed to parse method signature: " + sp.getSignature(), e);
-			return null;
+			load();
+		} catch (DecodeException e) {
+			throw new JadxRuntimeException("Failed to reload method " + getClass().getName() + "." + getName());
 		}
-	}
-
-	private boolean tryFixArgsCounts(List<ArgType> argsTypes, List<ArgType> mthArgs) {
-		if (!mthInfo.isConstructor()) {
-			return false;
-		}
-		if (getParentClass().getAccessFlags().isEnum()) {
-			if (mthArgs.size() >= 2) {
-				// TODO:
-				argsTypes.add(0, mthArgs.get(0));
-				argsTypes.add(1, mthArgs.get(1));
-			}
-		} else {
-			if (!mthArgs.isEmpty()) {
-				// add synthetic arg for outer class
-				argsTypes.add(0, mthArgs.get(0));
-			}
-		}
-		return argsTypes.size() == mthArgs.size();
 	}
 
 	private void initArguments(List<ArgType> args) {
@@ -239,10 +202,12 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 				pos -= arg.getRegCount();
 			}
 		}
+		TypeUtils typeUtils = root().getTypeUtils();
 		if (accFlags.isStatic()) {
 			thisArg = null;
 		} else {
-			RegisterArg arg = InsnArg.reg(pos - 1, parentClass.getClassInfo().getType());
+			ArgType thisClsType = typeUtils.expandTypeVariables(this, parentClass.getType());
+			RegisterArg arg = InsnArg.reg(pos - 1, thisClsType);
 			arg.add(AFlag.THIS);
 			arg.add(AFlag.IMMUTABLE_TYPE);
 			thisArg = arg;
@@ -253,7 +218,8 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		}
 		argsList = new ArrayList<>(args.size());
 		for (ArgType argType : args) {
-			RegisterArg regArg = InsnArg.reg(pos, argType);
+			ArgType expandedType = typeUtils.expandTypeVariables(this, argType);
+			RegisterArg regArg = InsnArg.reg(pos, expandedType);
 			regArg.add(AFlag.METHOD_ARGUMENT);
 			regArg.add(AFlag.IMMUTABLE_TYPE);
 			argsList.add(regArg);
@@ -323,7 +289,7 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 	}
 
 	@Override
-	public List<GenericTypeParameter> getTypeParameters() {
+	public List<ArgType> getTypeParameters() {
 		return typeParameters;
 	}
 
@@ -585,8 +551,8 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 	}
 
 	@Override
-	public Path getInputPath() {
-		return parentClass.getInputPath();
+	public String getInputFileName() {
+		return parentClass.getInputFileName();
 	}
 
 	@Override

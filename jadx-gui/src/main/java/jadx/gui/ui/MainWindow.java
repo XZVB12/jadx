@@ -46,7 +46,6 @@ import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JToggleButton;
@@ -397,7 +396,12 @@ public class MainWindow extends JFrame {
 		cacheObject.setIndexJob(new IndexJob(wrapper, cacheObject, threadsCount));
 	}
 
-	private synchronized void runBackgroundJobs() {
+	public void resetIndex() {
+		int threadsCount = settings.getThreadsCount();
+		cacheObject.setIndexJob(new IndexJob(wrapper, cacheObject, threadsCount));
+	}
+
+	synchronized void runBackgroundJobs() {
 		cancelBackgroundJobs();
 		backgroundWorker = new BackgroundWorker(cacheObject, progressPane);
 		if (settings.isAutoStartJobs()) {
@@ -498,10 +502,11 @@ public class MainWindow extends JFrame {
 		}
 	}
 
-	private void initTree() {
+	public void initTree() {
 		treeRoot = new JRoot(wrapper);
 		treeRoot.setFlatPackages(isFlattenPackage);
 		treeModel.setRoot(treeRoot);
+		treeRoot.update();
 		reloadTree();
 	}
 
@@ -509,11 +514,11 @@ public class MainWindow extends JFrame {
 		tabbedPane.closeAllTabs();
 		resetCache();
 		treeRoot = null;
-		treeModel.setRoot(treeRoot);
+		treeModel.setRoot(null);
 		treeModel.reload();
 	}
 
-	private void reloadTree() {
+	public void reloadTree() {
 		treeReloading = true;
 
 		treeModel.reload();
@@ -601,7 +606,7 @@ public class MainWindow extends JFrame {
 	private void treeRightClickAction(MouseEvent e) {
 		Object obj = getJNodeUnderMouse(e);
 		if (obj instanceof JPackage) {
-			JPackagePopUp menu = new JPackagePopUp((JPackage) obj);
+			JPackagePopupMenu menu = new JPackagePopupMenu(this, (JPackage) obj);
 			menu.show(e.getComponent(), e.getX(), e.getY());
 		}
 	}
@@ -1125,6 +1130,10 @@ public class MainWindow extends JFrame {
 		return backgroundWorker;
 	}
 
+	public BackgroundExecutor getBackgroundExecutor() {
+		return backgroundExecutor;
+	}
+
 	public ProgressPanel getProgressPane() {
 		return progressPane;
 	}
@@ -1159,24 +1168,6 @@ public class MainWindow extends JFrame {
 
 		@Override
 		public void menuCanceled(MenuEvent e) {
-		}
-	}
-
-	private class JPackagePopUp extends JPopupMenu {
-		JMenuItem excludeItem = new JCheckBoxMenuItem(NLS.str("popup.exclude"));
-
-		public JPackagePopUp(JPackage pkg) {
-			excludeItem.setSelected(!pkg.isEnabled());
-			add(excludeItem);
-			excludeItem.addItemListener(e -> {
-				String fullName = pkg.getFullName();
-				if (excludeItem.isSelected()) {
-					wrapper.addExcludedPackage(fullName);
-				} else {
-					wrapper.removeExcludedPackage(fullName);
-				}
-				reOpenFile();
-			});
 		}
 	}
 }

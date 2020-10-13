@@ -7,7 +7,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -17,11 +16,12 @@ import org.slf4j.LoggerFactory;
 
 import jadx.api.ResourceFile.ZipRef;
 import jadx.api.impl.SimpleCodeInfo;
+import jadx.api.plugins.utils.ZipSecurity;
 import jadx.core.codegen.CodeWriter;
 import jadx.core.utils.Utils;
 import jadx.core.utils.android.Res9patchStreamDecoder;
 import jadx.core.utils.exceptions.JadxException;
-import jadx.core.utils.files.ZipSecurity;
+import jadx.core.utils.files.FileUtils;
 import jadx.core.xmlgen.ResContainer;
 import jadx.core.xmlgen.ResTableParser;
 
@@ -68,7 +68,7 @@ public final class ResourcesLoader {
 					if (!ZipSecurity.isValidZipEntry(entry)) {
 						return null;
 					}
-					try (InputStream inputStream = new BufferedInputStream(zipFile.getInputStream(entry))) {
+					try (InputStream inputStream = ZipSecurity.getInputStreamForEntry(zipFile, entry)) {
 						return decoder.decode(entry.getSize(), inputStream);
 					}
 				}
@@ -127,16 +127,11 @@ public final class ResourcesLoader {
 		if (file == null) {
 			return;
 		}
-		try (ZipFile zip = new ZipFile(file)) {
-			Enumeration<? extends ZipEntry> entries = zip.entries();
-			while (entries.hasMoreElements()) {
-				ZipEntry entry = entries.nextElement();
-				if (ZipSecurity.isValidZipEntry(entry)) {
-					addEntry(list, file, entry);
-				}
-			}
-		} catch (Exception e) {
-			LOG.debug("Not a zip file: {}", file.getAbsolutePath());
+		if (FileUtils.isZipFile(file)) {
+			ZipSecurity.visitZipEntries(file, (zipFile, entry) -> {
+				addEntry(list, file, entry);
+			});
+		} else {
 			addResourceFile(list, file);
 		}
 	}

@@ -36,7 +36,8 @@ public final class CodeArea extends AbstractCodeArea {
 		super(contentPanel);
 		setSyntaxEditingStyle(node.getSyntaxName());
 
-		if (node instanceof JClass) {
+		boolean isJavaCode = node instanceof JClass;
+		if (isJavaCode) {
 			((RSyntaxDocument) getDocument()).setSyntaxStyle(new JadxTokenMaker(this));
 			addMenuItems();
 		}
@@ -46,6 +47,7 @@ public final class CodeArea extends AbstractCodeArea {
 		CodeLinkGenerator codeLinkGenerator = new CodeLinkGenerator(this);
 		setLinkGenerator(codeLinkGenerator);
 		addMouseListener(new MouseAdapter() {
+			@SuppressWarnings("deprecation")
 			@Override
 			public void mouseClicked(MouseEvent e) {
 				if (e.isControlDown()) {
@@ -57,6 +59,9 @@ public final class CodeArea extends AbstractCodeArea {
 				}
 			}
 		});
+		if (isJavaCode) {
+			addMouseMotionListener(new MouseHoverHighlighter(this, codeLinkGenerator));
+		}
 	}
 
 	@Override
@@ -65,6 +70,11 @@ public final class CodeArea extends AbstractCodeArea {
 			setText(node.getContent());
 			setCaretPosition(0);
 		}
+	}
+
+	@Override
+	public void refresh() {
+		setText(node.getContent());
 	}
 
 	private void addMenuItems() {

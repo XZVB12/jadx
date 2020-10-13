@@ -1,6 +1,5 @@
 package jadx.core.dex.nodes;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 
@@ -36,6 +35,10 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 		this.accFlags = new AccessInfo(accessFlags, AFType.FIELD);
 	}
 
+	public void updateType(ArgType type) {
+		this.type = type;
+	}
+
 	public FieldInfo getFieldInfo() {
 		return fieldInfo;
 	}
@@ -66,10 +69,6 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 		return type;
 	}
 
-	public void setType(ArgType type) {
-		this.type = type;
-	}
-
 	public ClassNode getParentClass() {
 		return parentClass;
 	}
@@ -88,8 +87,8 @@ public class FieldNode extends LineAttrNode implements ICodeNode {
 	}
 
 	@Override
-	public Path getInputPath() {
-		return parentClass.getInputPath();
+	public String getInputFileName() {
+		return parentClass.getInputFileName();
 	}
 
 	@Override
