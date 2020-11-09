@@ -137,8 +137,8 @@ public class RenameDialog extends JDialog {
 		File tmpFile = File.createTempFile("deobf_tmp_", ".txt");
 		try (FileOutputStream fileOut = new FileOutputStream(tmpFile)) {
 			for (String entry : deobfMap) {
-				fileOut.write(entry.getBytes());
-				fileOut.write(System.lineSeparator().getBytes());
+				fileOut.write(entry.getBytes(StandardCharsets.UTF_8));
+				fileOut.write(System.lineSeparator().getBytes(StandardCharsets.UTF_8));
 			}
 		}
 		File oldMap = File.createTempFile("deobf_bak_", ".txt");
@@ -159,13 +159,13 @@ public class RenameDialog extends JDialog {
 		int i = 0;
 		while (i < deobfMap.size()) {
 			if (deobfMap.get(i).startsWith(id)) {
-				LOG.debug("updateDeobfMap(): Removing entry " + deobfMap.get(i));
+				LOG.debug("updateDeobfMap(): Removing entry {}", deobfMap.get(i));
 				deobfMap.remove(i);
 			} else {
 				i++;
 			}
 		}
-		LOG.debug("updateDeobfMap(): Placing alias = " + alias);
+		LOG.debug("updateDeobfMap(): Placing alias = {}", alias);
 		deobfMap.add(alias);
 		return deobfMap;
 	}
@@ -272,7 +272,7 @@ public class RenameDialog extends JDialog {
 		try {
 			cls.reload();
 			IndexJob.refreshIndex(cache, cls.getCls());
-		} catch (Throwable e) {
+		} catch (Exception e) {
 			LOG.error("Failed to reload class: {}", cls, e);
 		}
 	}
